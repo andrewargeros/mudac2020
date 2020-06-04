@@ -1,0 +1,647 @@
+---
+title: "MUDAC 2020"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(viridis)
+library(rgdal)
+library(spdplyr)
+library(readxl)
+library(data.table)
+library(patchwork)
+library(corrplot)
+library(keras)
+library(caret)
+```
+
+```{r}
+dkt = read_csv("./train_dockets.csv")
+omo = read_csv("./train_other_motions.csv")
+tmo = read_csv("./train_terminating_motions.csv")
+cty = read_csv("./districts.csv")
+```
+
+```{r}
+gg1 = dkt %>%
+        group_by(circuit, district) %>% 
+        summarise(n = n()) %>% 
+        inner_join(., cty, by = c("district"="district_number")) %>% 
+        arrange(circuit) %>% 
+        mutate(cd = paste0(circuit, "/", district),
+               pc_pop = census_2010_population/100000,
+               pc_case = n/pc_pop) 
+          ggplot(aes(x = cd, y = pc_case, fill = factor(circuit))) + 
+          geom_col() + 
+          geom_label(aes(label = round(pc_case)), vjust = -0.5, fill = "white") + 
+          scale_fill_viridis(option = "magma", discrete = T, begin = 0.1, end = 0.8) + 
+          geom_label(aes(label = district_name), vjust = -1.25, fill = "white")
+
+gg2 = omo %>% 
+  group_by(motion_type) %>% 
+  summarise(n = n()) %>% 
+  ggplot(aes(x = reorder(motion_type,n), y = n, fill = n)) + 
+  geom_bar(stat = "identity") + 
+  coord_flip()+
+  scale_fill_viridis(option = "magma", discrete = F, begin = 0.1, end = 0.8) + 
+  labs(
+       x = "Motion",
+       y = "# of Filings",
+       fill = "Frequency") + 
+  scale_y_continuous(label = scales::comma)
+        
+gg3 = tmo %>% 
+  group_by(motion_type, filing_party) %>% 
+  summarise(n = n()) %>% 
+  ggplot(aes(x = motion_type, y = n, group = filing_party, fill = filing_party))+
+  geom_col(position = "dodge") + 
+  scale_fill_viridis(option = "magma", discrete = T, begin = 0.1, end = 0.8) 
+
+```
+
+```{r}
+dkt_gpd = plyr::join_all(list(dkt, omo, tmo), by = "mudac_id", type = "left") %>% 
+  as_tibble(.name_repair = "universal") %>% 
+  janitor::clean_names(case = "snake")
+
+gg4 = dkt_gpd %>% 
+  group_by(motion_type_36, filing_party_37) %>% 
+  summarise(n = n()) %>% 
+  ggplot(aes(x = motion_type_36, y = n, group = filing_party_37, fill = filing_party_37))+
+  geom_col(position = "dodge") +
+  scale_fill_viridis(option = "magma", discrete = T, begin = 0.1, end = 0.8)
+
+gg5 = dkt_gpd %>% 
+  group_by(motion_type_42, filing_party_43) %>% 
+  summarise(n = n()) %>% 
+  ggplot(aes(x = motion_type_42, y = n, group = filing_party_43, fill = filing_party_43))+
+  geom_col(position = "dodge") +
+  scale_fill_viridis(option = "magma", discrete = T, begin = 0.1, end = 0.8)
+
+```
+
+```{r}
+gg6_df = dkt %>% 
+  mutate(state = str_detect(str_to_lower(primarytitle), "state|county|city"),
+         defs = str_extract(primarytitle, "v.*") %>% 
+           str_to_title() %>% 
+           str_remove_all(., "Et Al") %>% 
+           str_remove_all(., "V.") %>% 
+           str_remove_all(., "City Of | State Of | , County Of|County Of|, City Of| The|,|Of America|Illinois") %>% 
+           str_trim()) %>% 
+  filter(state==T &
+         !(defs %like% "Allstate Insurance Company" |
+           defs %like% "Board Of Education Of Chicago" | 
+           defs %like% "United States Postal Service")) %>% 
+  group_by(defs) %>% 
+  summarise(n = n()) %>% 
+  filter(n > 30) %>% 
+  arrange(desc(n))
+
+gg6 = dkt %>% 
+  mutate(state = str_detect(str_to_lower(primarytitle), "state|county|city"),
+         defs = str_extract(primarytitle, "v.*") %>% 
+           str_to_title() %>% 
+           str_remove_all(., "Et Al") %>% 
+           str_remove_all(., "V.") %>% 
+           str_remove_all(., "City Of | State Of | , County Of|County Of|, City Of| The|,|Of America|Illinois") %>% 
+           str_trim()) %>% 
+  filter(state==T &
+         !(defs %like% "Allstate Insurance Company" |
+           defs %like% "Board Of Education Of Chicago" | 
+           defs %like% "United States Postal Service")) %>% 
+  group_by(defs) %>% 
+  summarise(n = n()) %>% 
+  filter(n > 30) %>% 
+  arrange(desc(n)) %>% 
+  ggplot(aes(x = defs, y = n, fill = n))+
+  geom_col() + 
+  scale_fill_viridis(option = "magma", discrete = F, begin = 0.1, end = 0.8) +
+  geom_label(aes(label = n), fill = "white")
+```
+
+```{r}
+gg7 = dkt %>% 
+  group_by(outcome) %>% 
+  summarise(n = n()) %>% 
+  ggplot(aes(x = outcome, y = n, fill = n))+
+  geom_col() + 
+  scale_fill_viridis(option = "magma", discrete = F, begin = 0.1, end = 0.8)
+
+file = "C:/RScripts/MUDAC 2020/US_District_Court_Jurisdictions"
+sf = readOGR(dsn = file, layer = "US_District_Court_Jurisdictions", verbose = T)
+
+sf_filter = sf %>% 
+  filter(!str_detect(DISTRICT, "ALASKA|PUERTO RICO|HAWAII|GUAM|NORTHERN MARIANA ISLANDS|VIRGIN ISLANDS"))
+plot(sf_filter)
+
+sff_fortified = broom::tidy(sf_filter, region = "DISTRICT")
+
+gg8 = dkt %>% 
+  inner_join(., cty, by = c("district" = "district_number")) %>% 
+  group_by(district, statute, census_2010_population) %>% 
+  summarise(n = n()) %>% 
+  mutate(pcp = n/census_2010_population) %>% 
+  filter(pcp > 0.0002) %>% 
+  ggplot(aes(x = factor(district), y = pcp, group = statute, fill = pcp))+
+  geom_col(position = "dodge")+
+  geom_label(aes(label = statute), position = position_dodge(width = 0.5))+
+  scale_fill_viridis()
+
+temp = dkt %>% 
+  inner_join(., cty, by = c("district" = "district_number")) %>% 
+  group_by(district, outcome) %>%
+  summarise(n = n())
+temp2 = dkt %>% 
+  group_by(district) %>% 
+  summarise(cases = n())
+temp = inner_join(temp, temp2, by = "district") 
+temp$pct_case = temp$n/temp$cases
+temp_dis1 = temp %>% filter(outcome == "Dismissed") %>% select(1,5) %>% rename("pct_dis" = pct_case)
+temp = inner_join(temp, temp_dis1, by = "district")
+
+gg9 = temp %>% ggplot(aes(x =reorder(factor(district), -pct_dis), y = pct_case, group = outcome, fill = outcome))+
+  geom_col() + 
+  scale_fill_viridis(option = "magma", discrete = T, begin = 0.1, end = 0.8) + 
+  labs(title = "Outcome Ratios by Judicial District",
+       x = "Judicial District Number",
+       y = "Outcome Ratio", 
+       fill = "Outcome") +
+  scale_y_continuous(label = scales::percent)
+
+
+```
+
+
+```{r}
+demo = read_xlsx("Demographicss.xlsx", sheet = 1) %>% 
+  janitor::clean_names(case = "snake") %>% 
+  rename("state" = state_name)
+demo_pct = read_xlsx("Demographicss.xlsx", sheet = 2) %>% 
+  janitor::clean_names(case = "snake") %>% 
+  rename("state" = state_name)
+
+cty = plyr::join_all(list(cty,
+                          demo,
+                          demo_pct), by = "state", type = "inner")
+cty_table = cty %>% 
+  group_by(state) %>% 
+  summarise(dists = n()) %>% 
+  inner_join(., demo, by = "state", type = "inner") %>%
+  inner_join(., demo_pct, by = "state", type = "inner") %>% 
+  rename("pct_native_american" = pct_indian)
+
+cases = dkt %>% 
+  group_by(district) %>% 
+  summarise(n = length(unique(primarytitle))) %>% 
+  inner_join(., cty, by = c("district" = "district_number"))
+lm_cases = lm(n ~ pct_white, data = cases %>% filter(district != 52))
+
+gg_cases = ggplot(cases, aes(x = pct_white, y = n, color = n))+
+  geom_point()+
+  geom_label(aes(label = district_name))
+
+m = cor(cty_table[,2:13])
+corrplot(m, method = "color", type = "upper", col = magma(n = 30), tl.col = "black")
+
+gg10 = ggplot(cty_table, aes(x = dists, y = pct_black, group = dists, fill = factor(dists))) + 
+  geom_boxplot(alpha = 0.75) + 
+  scale_fill_viridis(option = "magma", discrete = T, begin = 0.1, end = 0.8) + 
+  labs(title = "% Black Population and Number of Judicial Districts in a State",
+       x = "Number of Judicial Districts in State",
+       y = "Propotion of State's Black Population",
+       fill = "Number of Districts") + 
+  scale_y_continuous(labels = scales::percent) + 
+  theme(legend.position = "none")
+
+gg11 = ggplot(cty_table, aes(x = dists, y = pct_white, group = dists, fill = factor(dists))) + 
+  geom_boxplot(alpha = 0.75) + 
+  scale_fill_viridis(option = "magma", discrete = T, begin = 0.1, end = 0.8)+ 
+  labs(title = "% White Population and Number of Judicial Districts in a State",
+       x = "Number of Judicial Districts in State",
+       y = "Propotion of State's White Population",
+       fill = "Number of Districts") + 
+  scale_y_continuous(labels = scales::percent)+ 
+  theme(legend.position = "none")
+
+
+gg12 = ggplot(cty_table, aes(x = dists, y = total_population, group = dists, fill = factor(dists)))+
+  geom_boxplot(alpha = 0.75)+
+  scale_fill_viridis(option = "magma", discrete = T, begin = 0.1, end = 0.8)+ 
+  labs(title = "State Population and Number of Judicial Districts in a State",
+       x = "Number of Judicial Districts in State",
+       y = "State Population",
+       fill = "Number of Districts") + 
+  scale_y_continuous(label = scales::comma)
+
+gg_pd_df1 = dkt_gpd %>% 
+  filter(!is.na(decison)) %>% 
+  mutate(dec_2 = fct_collapse(decison, 
+                              Denied = c("Denied", "Denied as Moot"))) %>% 
+  group_by(district, filing_party_37,dec_2) %>% 
+    summarise(n = n())
+gg_pd_df = dkt_gpd %>% 
+  filter(!is.na(decison)) %>% 
+  group_by(district) %>% 
+  summarise(n_total = n()) %>% 
+  inner_join(., gg_pd_df1, by = "district") %>% 
+  mutate(pct_act = n/n_total) %>% 
+  filter(filing_party_37 %in% c("Plaintiff", "Defendant")) %>% 
+  ggplot(aes(x = reorder(factor(district), -(dec_2=="Denied")), y = pct_act, group = dec_2, fill = dec_2))+
+  geom_col()+
+  scale_fill_viridis(option = "magma", begin = 0.1, end = 0.8, discrete = T)+
+  facet_wrap(~filing_party_37) +
+  labs(x = "Judicial District",
+       y = "Percent of Motions Ending with Judgement",
+       title = "The Disparity in Motion Judgements for Plaintiffs and Defendants by District",
+       fill = "Judgement")+
+  scale_y_continuous(label = scales::percent)
+```
+
+```{r}
+temp_dis = temp %>% 
+  filter(outcome == "Dismissed") %>% 
+  arrange(pct_case) %>% 
+  inner_join(., cty, by = c("district" = "district_number")) 
+
+cor_dis = cor(temp_dis[,c(3:5,8:19)])["pct_case", ]
+cor_dis$name = names(cor_dis)
+cor_dis = cor_dis %>% as.data.frame()
+cor_dis$name = "pct_case"
+
+cor_dis = read_csv("cor_dis.csv")
+cor_dis = cor_dis[1:15,] %>% 
+  transform(cor = as.numeric(cor))
+gg13 = ggplot(cor_dis %>% filter(var != "pct_case") %>% arrange(desc(cor)), aes(x = reorder(var, -cor), y = cor, fill = cor))+
+  geom_col() + 
+  scale_fill_viridis(option = "magma", begin = 0.1, end = 0.8) + 
+  labs(
+       x = "Feature",
+       y = "Correlation Coefficient",
+       fill = "R")
+```
+
+```{r}
+# Case Level Motions
+df = dkt %>% 
+  inner_join(., omo, by = "mudac_id") %>% 
+  group_by(mudac_id, motion_type) %>% 
+  summarise(n = n()) %>% 
+  mutate(n = ifelse(is.na(n),0,n)) %>% 
+  pivot_wider(names_from = 2, values_from = 3) %>% 
+  janitor::clean_names(case = "snake")
+df[is.na(df)]=0
+df_2 = dkt %>% 
+  inner_join(., tmo, by = "mudac_id") %>% 
+  group_by(mudac_id, motion_type) %>% 
+  summarise(n = n()) %>% 
+  mutate(n = ifelse(is.na(n),0,n)) %>% 
+  pivot_wider(names_from = 2, values_from = 3) %>% 
+  janitor::clean_names(case = "snake")
+df_2[is.na(df_2)] = 0
+
+# State Level Motions
+inc = read_xlsx("Median Income.xlsx", sheet = 1) %>% 
+  janitor::clean_names(case = "snake")
+stt = inner_join(cty, inc, by = "state") %>% 
+  rename("district" = district_number)
+
+dkt_mod = dkt %>% 
+  select(
+         -nos_text,
+         -statute,
+         -protected_class,
+         -additional_nos,
+         -jurisdiction,
+         -diversity_residence,
+         -informa_pauperis,
+         -arbitration_at_filing,
+         -origin_at_filing,
+         -filers_county,
+         -issue_joined,
+         -summary_judgment,
+         -settled)
+
+dat = plyr::join_all(list(dkt_mod, df, df_2), by = "mudac_id", type = "left")  
+dat = plyr::join_all(list(dat, stt), by = "district", type = "inner") %>% 
+  select(-mudac_id,
+         -district_name,
+         -state)
+
+
+
+```
+
+```{r}
+dat$settled = ifelse(dat$outcome=="Settled",1,0)
+dat$summaryju = ifelse(dat$outcome=="Summary Judgment",1,0)
+dat$black_x_inc = dat$pct_black * dat$med_income
+dat$l_total_pop = log(dat$total_population)
+dat$l_census_pop = log(dat$census_2010_population)
+dat$pop_change = (dat$total_population - dat$census_2010_population)/dat$census_2010_population
+dat$jury_demand = ifelse(dat$jury_demand=="B",2, 
+                         ifelse(dat$jury_demand %in% c("D", "P"),1, 0))
+dat$jury_demand = as.numeric(dat$jury_demand)
+
+dat = dat %>% select(-primarytitle)
+
+dat[which(is.na(dat)), 21:35] = 0
+temp_set = temp %>% 
+  filter(outcome=="Settled") %>% 
+  select(district, pct_case) %>% 
+  rename("pct_settled" = pct_case)
+temp_suju = temp %>% 
+  filter(outcome=="Summary Judgment") %>% 
+  select(district, pct_case) %>% 
+  rename("pct_suju" = pct_case)
+dat = inner_join(dat, temp_set, by = "district")
+dat = inner_join(dat, temp_suju, by = "district")
+
+dist_2 = dat %>% 
+  group_by(district, year_filed) %>% 
+  summarise(cases = n())
+dat = inner_join(dat, dist_2, by = c("district", "year_filed"))
+
+mod_dat_1 = dat %>% select(-outcome, -summaryju, -office, -circuit, -total_population,
+                           -motion_for_discovery_sanctions, -motion_to_certify_class, 
+                           -motion_to_compel_arbitration, -motion_to_remand,
+                           -motion_to_consolidate, -motion_for_default_judgment,
+                           -motion_to_transfer_venue, -white, -hispanic,
+                           -indian)
+mod_dat_1 = na.omit(mod_dat_1)
+intrain = createDataPartition(mod_dat_1$settled, p = 0.75, list = F)
+md1_train = mod_dat_1[intrain, ]
+md1_valid = mod_dat_1[-intrain, ]
+lm_fuck = glm(settled ~ ., data = md1_train, family = binomial(link = "logit"))
+summary(lm_fuck)
+preds = predict(lm_fuck, md1_valid, type = "response")
+head(preds)
+preds_classes = ifelse(preds>=0.5,1,0)
+mean(preds_classes==md1_valid$settled)
+
+mod_dat_2 = dat %>% select(-outcome, -settled, -office, -circuit, -total_population,
+                           -motion_for_discovery_sanctions, -motion_to_certify_class, 
+                           -motion_to_compel_arbitration, -motion_to_remand,
+                           -motion_to_consolidate, -motion_for_default_judgment,
+                           -motion_to_transfer_venue, -white, -hispanic,
+                           -indian)
+mod_dat_2 = na.omit(mod_dat_2)
+intrain = createDataPartition(mod_dat_2$summaryju, p = 0.75, list = F)
+md2_train = mod_dat_2[intrain, ]
+md2_valid = mod_dat_2[-intrain, ]
+lm_suju = glm(summaryju ~ ., data = md2_train, family = binomial(link = "logit"))
+summary(lm_suju)
+preds_suju = predict(lm_suju, md2_valid, type = "response")
+head(preds_suju)
+preds_classes_suju = ifelse(preds_suju>=0.5,1,0)
+mean(preds_classes_suju==md2_valid$summaryju)
+
+
+```
+
+```{r}
+set_store = c()
+suju_store = c()
+for(i in 1:10){
+  set.seed(i)
+  intrain = createDataPartition(mod_dat_1$settled, p = 0.75, list = F)
+  intrain_suju = createDataPartition(mod_dat_2$summaryju, p = 0.75, list = F)
+  
+  md1_train = mod_dat_1[intrain, ]
+  md1_valid = mod_dat_1[-intrain, ]
+  
+  lm_set = glm(settled ~ ., data = md1_train, family = binomial(link = "logit"))
+  preds_set = predict(lm_set, md1_valid, type = "response")
+  preds_set_class = ifelse(preds_set >= 0.5, 1, 0)
+  acc_set = mean(preds_set_class==md1_valid$settled)
+  
+  set_store = append(set_store, acc_set)
+  
+  z = lm_set$fitted.values %>% as_tibble()
+  p = preds_set %>% as_tibble()
+  mod_dat_2$fv = c(z$value, p$value)
+  
+  md2_train = mod_dat_2[intrain, ]
+  md2_valid = mod_dat_2[-intrain, ]
+
+  lm_suju = glm(summaryju ~ ., data = md2_train, family = binomial(link = "logit"))
+  preds_suju = predict(lm_suju, md2_valid, type = "response")
+  preds_suju_class = ifelse(preds_suju >= 0.5, 1, 0)
+  acc_suju = mean(preds_suju_class == md2_valid$summaryju)
+  
+  suju_store = append(suju_store, acc_suju)
+}
+
+mean(set_store)
+mean(suju_store)
+```
+
+```{r}
+dkt_test = read_csv("./test_dockets.csv")
+dkt_validate = read_csv("./test_dockets.csv")
+omo_test = read_csv("./test_other_motions.csv")
+tmo_test = read_csv("./test_terminating_motions.csv")
+
+df_test = dkt_test %>% 
+  inner_join(., omo_test, by = "mudac_id") %>% 
+  group_by(mudac_id, motion_type) %>% 
+  summarise(n = n()) %>% 
+  mutate(n = ifelse(is.na(n),0,n)) %>% 
+  pivot_wider(names_from = 2, values_from = 3) %>% 
+  janitor::clean_names(case = "snake")
+df_test[is.na(df_test)]=0
+df_2_test = dkt_test %>% 
+  inner_join(., tmo_test, by = "mudac_id") %>% 
+  group_by(mudac_id, motion_type) %>% 
+  summarise(n = n()) %>% 
+  mutate(n = ifelse(is.na(n),0,n)) %>% 
+  pivot_wider(names_from = 2, values_from = 3) %>% 
+  janitor::clean_names(case = "snake")
+df_2_test[is.na(df_2_test)] = 0
+
+# State Level Motions
+inc_test = read_xlsx("Median Income.xlsx", sheet = 1) %>% 
+  janitor::clean_names(case = "snake")
+stt_test = inner_join(cty, inc_test, by = "state") %>% 
+  rename("district" = district_number)
+
+dkt_mod_test = dkt_test %>% 
+  select(
+         -nos_text,
+         -statute,
+         -protected_class,
+         -additional_nos,
+         -jurisdiction,
+         -diversity_residence,
+         -informa_pauperis,
+         -arbitration_at_filing,
+         -origin_at_filing,
+         -filers_county,
+         -issue_joined)
+
+dat_test = plyr::join_all(list(dkt_mod_test, df_test, df_2_test), by = "mudac_id", type = "left")  
+dat_test = plyr::join_all(list(dat_test, stt_test), by = "district", type = "left") %>% 
+  select(-mudac_id,
+         -district_name,
+         -state)
+dat_test$black_x_inc = dat_test$pct_black * dat_test$med_income
+dat_test$l_total_pop = log(dat_test$total_population)
+dat_test$l_census_pop = log(dat_test$census_2010_population)
+dat_test$pop_change = (dat_test$total_population - dat_test$census_2010_population)/dat_test$census_2010_population
+dat_test$jury_demand = ifelse(dat_test$jury_demand=="B",2, 
+                         ifelse(dat_test$jury_demand %in% c("D", "P"),1, 0))
+dat_test$jury_demand = as.numeric(dat_test$jury_demand)
+
+dat_test = left_join(dat_test, temp_set, by = "district")
+dat_test = left_join(dat_test, temp_suju, by = "district")
+dat_test = left_join(dat_test, dist_2, by = c("district", "year_filed"))
+dat_test[is.na(dat_test)] = 0
+dat_test$pretrial_conf = as.logical(dat_test$pretrial_conf)
+dat_test$class_action = as.logical(dat_test$class_action)
+
+preds_set_test = predict(lm_set, dat_test, type = "response") %>% as_tibble() %>% rename("probability" = value)
+set_test_id = paste0(dkt_validate$mudac_id,"-Settled") %>% as_tibble() %>% rename("id" = value)
+
+dat_test_suju = dat_test
+dat_test_suju$fv = preds_set_test
+
+preds_suju_test = predict(lm_suju, dat_test_suju, type = "response") %>% as_tibble()
+suju_test_id = paste0(dkt_validate$mudac_id,"-SummaryJudgment") %>% as_tibble()
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
